@@ -1,6 +1,11 @@
+# Misc
 .DS_Store
+
+# Swift
 /.build
-/.theos_build
 /Packages
 /*.xcodeproj
 xcuserdata/
+
+# Theos
+/.theos*
