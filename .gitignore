@@ -1,0 +1,6 @@
+.DS_Store
+/.build
+/.theos_build
+/Packages
+/*.xcodeproj
+xcuserdata/
