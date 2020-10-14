@@ -104,8 +104,12 @@ struct CompileOutput: OutputBody {
     var messages: [SemanticMessage] {
         if kind == .finished && (exitStatus ?? 0) != 0, let output = output {
             return [.raw(output)]
+        } else if let inputs = inputs {
+            return inputs.filter {
+                !$0.hasSuffix(".pch") && !$0.hasSuffix(".xc.swift")
+            }.map(SemanticMessage.compiling)
         } else {
-            return (inputs ?? []).filter { !$0.hasSuffix(".pch") }.map(SemanticMessage.compiling)
+            return []
         }
     }
 }
