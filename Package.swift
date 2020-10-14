@@ -12,9 +12,11 @@ let package = Package(
         .executable(
             name: "generate-output-file-map",
             targets: ["FileMapGenerator"]
-        ),
+        )
     ],
-    dependencies: [],
+    dependencies: [
+        .package(path: "orion")
+    ],
     targets: [
         .target(name: "SwiftcOutputParser"),
         .testTarget(

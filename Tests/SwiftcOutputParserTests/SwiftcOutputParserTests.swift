@@ -1,5 +1,5 @@
 import XCTest
-@testable import SwiftcOutputParser
+// @testable import SwiftcOutputParser
 
 final class SwiftcOutputParserTests: XCTestCase {
     func testExample() {}
