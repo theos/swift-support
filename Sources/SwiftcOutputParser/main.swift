@@ -21,6 +21,8 @@ func check<T: SignedInteger>(_ code: T, _ fn: String, file: StaticString = #file
     return code
 }
 
+var errorOccurred = false
+
 let options = Options(
     debug: ProcessInfo.processInfo.environment["DEBUG_OUTPUT"] != nil,
     colored: CommandLine.arguments[1] == "1",
@@ -150,6 +152,7 @@ struct CompileOutput: OutputBody {
 
     var messages: [SemanticMessage] {
         if kind == .finished && (exitStatus ?? 0) != 0, let output = output {
+            errorOccurred = true
             return [.raw(output)]
         } else if let inputs = inputs {
             return inputs.filter {
@@ -253,6 +256,7 @@ func parse() throws {
         // If it isn't numeric, that probably means swiftc is outputting some error,
         // in which case we should just spit it out
         guard let charsToRead = Int(line) else {
+            errorOccurred = true
             return spitItOut(startingWith: line)
         }
         try parseBody(ofLength: charsToRead)
@@ -266,5 +270,9 @@ do {
     if options.debug {
         fputs("Error: \(error)\n", stderr)
     }
+    exit(1)
+}
+
+if errorOccurred {
     exit(1)
 }
