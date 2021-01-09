@@ -3,23 +3,70 @@ import Foundation
 struct Options {
     let debug: Bool
     let colored: Bool
+    let jobserver: String
     let arch: String?
 }
 
-guard CommandLine.argc >= 3 else {
-    print("Usage: \(CommandLine.arguments[0]) <colored: 0|1> [arch]")
+guard CommandLine.argc >= 4 else {
+    print("Usage: \(CommandLine.arguments[0]) <colored: 0|1> </path/to/jobserver/socket|-> [arch]")
     exit(EX_USAGE)
+}
+
+@discardableResult
+func check<T: SignedInteger>(_ code: T, _ fn: String, file: StaticString = #file, line: Int = #line) -> T {
+    if code < 0 {
+        perror("Error: \(fn)() failed at \(file):\(line) (errno=\(errno))")
+        exit(1)
+    }
+    return code
 }
 
 let options = Options(
     debug: ProcessInfo.processInfo.environment["DEBUG_OUTPUT"] != nil,
     colored: CommandLine.arguments[1] == "1",
-    arch: CommandLine.arguments[2]
+    jobserver: CommandLine.arguments[2],
+    arch: CommandLine.arguments[3]
 )
+
+var jobserver = options.jobserver
+var sfd: Int32?
+if jobserver != "-" {
+    let socketFD = check(socket(AF_UNIX, SOCK_STREAM, 0), "socket")
+    var addr = sockaddr_un()
+    addr.sun_family = .init(AF_UNIX)
+    addr.sun_len = .init(jobserver.utf8.count)
+    withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
+        jobserver.withUTF8 {
+            UnsafeMutableRawBufferPointer(UnsafeMutableBufferPointer(start: sunPath, count: 1))
+                .copyMemory(from: UnsafeRawBufferPointer($0))
+        }
+    }
+    let addrLen = socklen_t(MemoryLayout.size(ofValue: addr))
+    check(withUnsafePointer(to: &addr) {
+        connect(socketFD, UnsafeRawPointer($0).assumingMemoryBound(to: sockaddr.self), addrLen)
+    }, "connect")
+    sfd = socketFD
+}
+
+func outputPrint(_ message: String, terminator: String = "\n") {
+    if let sfd = sfd {
+        var combined = "\(message)\(terminator)"
+        combined.withUTF8 { bytes in
+            withUnsafePointer(to: bytes.count) {
+                let buf = UnsafeBufferPointer(start: $0, count: 1)
+                let rawBuf = UnsafeRawBufferPointer(buf)
+                check(send(sfd, rawBuf.baseAddress!, rawBuf.count, 0), "send")
+            }
+            check(send(sfd, bytes.baseAddress!, bytes.count, 0), "send")
+        }
+    } else {
+        print(message, terminator: terminator)
+    }
+}
 
 func debugPrint(_ message: Any) {
     guard options.debug else { return }
-    print(message)
+    print("\(message)")
 }
 
 enum Format {
@@ -190,7 +237,7 @@ func parseBody(ofLength totalLength: Int) throws {
         return
     }
 
-    output.body.messages.forEach { print($0) }
+    output.body.messages.forEach { outputPrint("\($0)") }
 }
 
 func spitItOut(startingWith firstLine: String) {
