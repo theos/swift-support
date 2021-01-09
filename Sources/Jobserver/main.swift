@@ -58,8 +58,10 @@ func serve(clientFD: Int32) {
         defer { stringBuf.deallocate() }
         check(recv(clientFD, stringBuf, stringLen, 0), "recv")
         let string = String(bytesNoCopy: stringBuf, length: stringLen, encoding: .utf8, freeWhenDone: false)!
+        group.enter()
         outputQueue.async {
             print(string, terminator: "")
+            group.leave()
         }
     }
     check(close(clientFD), "close")
