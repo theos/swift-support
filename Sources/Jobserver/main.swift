@@ -4,11 +4,11 @@
 import Foundation
 
 func usage() -> Never {
-    print("Usage: \(CommandLine.arguments[0]) </path/to/jobserver/socket> <expected # of connections>")
+    print("Usage: \(CommandLine.arguments[0]) </path/to/jobserver/socket> <expected # of connections|-1>")
     exit(EX_USAGE)
 }
 
-guard CommandLine.argc == 3, let connections = Int(CommandLine.arguments[2]), connections >= 0 else {
+guard CommandLine.argc == 3, let connections = Int(CommandLine.arguments[2]), connections >= -1 else {
     usage()
 }
 
@@ -68,7 +68,7 @@ func serve(clientFD: Int32) {
     group.leave()
 }
 
-for _ in 0..<connections {
+func loop() {
     var clientAddr = sockaddr_un()
     var clientAddrLen = socklen_t(MemoryLayout.size(ofValue: clientAddr))
     let clientFD = withUnsafeMutablePointer(to: &clientAddr) { clientAddrPtr in
@@ -81,6 +81,16 @@ for _ in 0..<connections {
     group.enter()
     clientQueue.async {
         serve(clientFD: clientFD)
+    }
+}
+
+if connections == -1 {
+    while true {
+        loop()
+    }
+} else {
+    for _ in 0..<connections {
+        loop()
     }
 }
 
