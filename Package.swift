@@ -18,9 +18,6 @@ let package = Package(
             targets: ["Jobserver"]
         )
     ],
-    dependencies: [
-        .package(path: "orion")
-    ],
     targets: [
         .target(name: "SwiftcOutputParser"),
         .testTarget(
