@@ -33,10 +33,17 @@ let options = Options(
 var jobserver = options.jobserver
 var sfd: Int32?
 if jobserver != "-" {
-    let socketFD = check(socket(AF_UNIX, SOCK_STREAM, 0), "socket")
+    #if os(Linux)
+    let socketType = Int32(SOCK_STREAM.rawValue)
+    #else
+    let socketType = SOCK_STREAM
+    #endif
+    let socketFD = check(socket(AF_UNIX, socketType, 0), "socket")
     var addr = sockaddr_un()
     addr.sun_family = .init(AF_UNIX)
+    #if !os(Linux)
     addr.sun_len = .init(jobserver.utf8.count)
+    #endif
     withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
         jobserver.withUTF8 {
             UnsafeMutableRawBufferPointer(UnsafeMutableBufferPointer(start: sunPath, count: 1))
@@ -136,6 +143,7 @@ struct CompileOutput: OutputBody {
     enum Kind: String, Decodable {
         case began
         case finished
+        case signalled
     }
 
     let kind: Kind
@@ -151,7 +159,7 @@ struct CompileOutput: OutputBody {
     }
 
     var messages: [SemanticMessage] {
-        if kind == .finished && (exitStatus ?? 0) != 0, let output = output {
+        if (kind == .finished && (exitStatus ?? 0) != 0) || kind == .signalled, let output = output {
             errorOccurred = true
             return [.raw(output)]
         } else if let inputs = inputs {

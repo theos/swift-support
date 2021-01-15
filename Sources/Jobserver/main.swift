@@ -26,10 +26,17 @@ var path = CommandLine.arguments[1]
 // serial output queue
 let outputQueue = DispatchQueue(label: "output-queue", qos: .userInteractive)
 
-let serverFD = check(socket(AF_UNIX, SOCK_STREAM, 0), "socket")
+#if os(Linux)
+let socketType = Int32(SOCK_STREAM.rawValue)
+#else
+let socketType = SOCK_STREAM
+#endif
+let serverFD = check(socket(AF_UNIX, socketType, 0), "socket")
 var addr = sockaddr_un()
 addr.sun_family = .init(AF_UNIX)
+#if !os(Linux)
 addr.sun_len = .init(path.utf8.count)
+#endif
 withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
     path.withUTF8 {
         UnsafeMutableRawBufferPointer(UnsafeMutableBufferPointer(start: sunPath, count: 1))
