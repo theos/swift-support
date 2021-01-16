@@ -33,9 +33,10 @@ let socketType = SOCK_STREAM
 #endif
 let serverFD = check(socket(AF_UNIX, socketType, 0), "socket")
 var addr = sockaddr_un()
+let addrLen = socklen_t(MemoryLayout.size(ofValue: addr))
 addr.sun_family = .init(AF_UNIX)
 #if !os(Linux)
-addr.sun_len = .init(path.utf8.count)
+addr.sun_len = .init(addrLen)
 #endif
 withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
     path.withUTF8 {
@@ -43,7 +44,6 @@ withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
             .copyMemory(from: UnsafeRawBufferPointer($0))
     }
 }
-let addrLen = socklen_t(MemoryLayout.size(ofValue: addr))
 check(withUnsafePointer(to: &addr) {
     bind(serverFD, UnsafeRawPointer($0).assumingMemoryBound(to: sockaddr.self), addrLen)
 }, "bind")
