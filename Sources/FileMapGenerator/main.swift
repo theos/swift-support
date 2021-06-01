@@ -12,11 +12,13 @@ var dict: [String: [String: String]] = [:]
 for file in CommandLine.arguments[3...] {
     dict[file] = [
         "object": "\(dir)/\(file).\(tag).o",
+        "swift-dependencies": "\(dir)/\(file).\(tag).swiftdeps",
         "dependencies": "\(dir)/\(file).\(tag).Td"
     ]
 }
 dict[""] = [
-    "swift-dependencies": "\(dir)/master.swiftdeps"
+    "dependencies": "\(dir)/master.\(tag).Td",
+    "swift-dependencies": "\(dir)/master.\(tag).swiftdeps"
 ]
 
 let json = try JSONEncoder().encode(dict)
