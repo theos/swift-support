@@ -63,7 +63,10 @@ func serve(clientFD: Int32) {
         guard out != 0 else { break }
         let stringBuf = UnsafeMutablePointer<CChar>.allocate(capacity: stringLen)
         defer { stringBuf.deallocate() }
-        check(recv(clientFD, stringBuf, stringLen, 0), "recv")
+        var received = 0
+        while received != stringLen {
+            received += check(recv(clientFD, stringBuf + received, stringLen - received, 0), "recv")
+        }
         let string = String(bytesNoCopy: stringBuf, length: stringLen, encoding: .utf8, freeWhenDone: false)!
         group.enter()
         outputQueue.async {
