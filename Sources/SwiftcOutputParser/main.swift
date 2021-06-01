@@ -142,6 +142,7 @@ protocol OutputBody: Decodable {
 struct CompileOutput: OutputBody {
     enum Kind: String, Decodable {
         case began
+        case skipped
         case finished
         case signalled
     }
@@ -175,6 +176,7 @@ struct CompileOutput: OutputBody {
 struct MergeModuleOutput: OutputBody {
     enum Kind: String, Decodable {
         case began
+        case finished
     }
 
     struct OutputFile: Decodable {
@@ -183,10 +185,10 @@ struct MergeModuleOutput: OutputBody {
     }
 
     let kind: Kind
-    let outputs: [OutputFile]
+    let outputs: [OutputFile]?
 
     var messages: [SemanticMessage] {
-        outputs
+        (outputs ?? [])
             .filter { $0.type == "objc-header" }
             .map { URL(fileURLWithPath: $0.path).lastPathComponent }
             .map(SemanticMessage.swiftmoduleHeader)
