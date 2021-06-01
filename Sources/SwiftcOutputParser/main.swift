@@ -160,16 +160,29 @@ struct CompileOutput: OutputBody {
     }
 
     var messages: [SemanticMessage] {
-        if (kind == .finished && (exitStatus ?? 0) != 0) || kind == .signalled, let output = output {
+        if (kind == .finished && (exitStatus ?? 0) != 0) || kind == .signalled {
             errorOccurred = true
-            return [.raw(output)]
-        } else if let inputs = inputs {
-            return inputs.filter {
+        }
+
+        var allMessages: [SemanticMessage] = []
+        if let output = output {
+            allMessages.append(.raw(output))
+        }
+
+        switch inputs {
+        case []:
+            // the new Swift driver seems to (buggily?) provide an empty inputs
+            // array for WMO builds
+            allMessages.append(SemanticMessage.compiling(file: "Swift module"))
+        case let inputs?:
+            allMessages += inputs.filter {
                 !$0.hasSuffix(".pch") && !$0.hasSuffix(".xc.swift")
             }.map(SemanticMessage.compiling)
-        } else {
-            return []
+        case nil:
+            break
         }
+
+        return allMessages
     }
 }
 
