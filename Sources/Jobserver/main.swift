@@ -70,7 +70,7 @@ func serve(clientFD: Int32) {
         let string = String(bytesNoCopy: stringBuf, length: stringLen, encoding: .utf8, freeWhenDone: false)!
         group.enter()
         outputQueue.async {
-            print(string, terminator: "")
+            FileHandle.standardOutput.write(string.data(using: .utf8)!)
             group.leave()
         }
     }
