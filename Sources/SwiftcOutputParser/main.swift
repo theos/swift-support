@@ -1,4 +1,5 @@
 import Foundation
+import JobserverCommon
 
 struct Options {
     let debug: Bool
@@ -12,15 +13,6 @@ guard CommandLine.argc >= 4 else {
     exit(EX_USAGE)
 }
 
-@discardableResult
-func check<T: SignedInteger>(_ code: T, _ fn: String, file: StaticString = #file, line: Int = #line) -> T {
-    if code < 0 {
-        perror("Error: \(fn)() failed at \(file):\(line) (errno=\(errno))")
-        exit(1)
-    }
-    return code
-}
-
 var errorOccurred = false
 
 let options = Options(
@@ -31,46 +23,11 @@ let options = Options(
 )
 
 var jobserver = options.jobserver
-var sfd: Int32?
-if jobserver != "-" {
-    #if os(Linux)
-    let socketType = Int32(SOCK_STREAM.rawValue)
-    #else
-    let socketType = SOCK_STREAM
-    #endif
-    let socketFD = check(socket(AF_UNIX, socketType, 0), "socket")
-    var addr = sockaddr_un()
-    let addrLen = socklen_t(MemoryLayout.size(ofValue: addr))
-    addr.sun_family = .init(AF_UNIX)
-    #if !os(Linux)
-    addr.sun_len = .init(addrLen)
-    #endif
-    withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
-        jobserver.withUTF8 {
-            UnsafeMutableRawBufferPointer(UnsafeMutableBufferPointer(start: sunPath, count: 1))
-                .copyMemory(from: UnsafeRawBufferPointer($0))
-        }
-    }
-    check(withUnsafePointer(to: &addr) {
-        connect(socketFD, UnsafeRawPointer($0).assumingMemoryBound(to: sockaddr.self), addrLen)
-    }, "connect")
-    sfd = socketFD
-}
-
-func outputPrint(_ message: String, terminator: String = "\n") {
-    if let sfd = sfd {
-        var combined = "\(message)\(terminator)"
-        combined.withUTF8 { bytes in
-            withUnsafePointer(to: bytes.count) {
-                let buf = UnsafeBufferPointer(start: $0, count: 1)
-                let rawBuf = UnsafeRawBufferPointer(buf)
-                check(send(sfd, rawBuf.baseAddress!, rawBuf.count, 0), "send")
-            }
-            check(send(sfd, bytes.baseAddress!, bytes.count, 0), "send")
-        }
-    } else {
-        print(message, terminator: terminator)
-    }
+let sfd: Int32?
+if jobserver == "-" {
+    sfd = nil
+} else {
+    sfd = createSocket(path: jobserver, kind: .client)
 }
 
 func debugPrint(_ message: Any) {
@@ -126,6 +83,37 @@ enum SemanticMessage: CustomStringConvertible {
         case .swiftmoduleHeader(let header):
             return Format.stage(.blue).apply(to: "Generating \(header)\(archStr)")
         }
+    }
+
+    var payload: JobserverPayload {
+        let message = "\(self)\n"
+        let fd: Int32
+        switch self {
+        case .raw:
+            fd = FileHandle.standardError.fileDescriptor
+        default:
+            fd = FileHandle.standardOutput.fileDescriptor
+        }
+        return JobserverPayload(fileDescriptor: fd, message: message)
+    }
+}
+
+let encoder = PropertyListEncoder()
+
+func sendOutput(_ message: SemanticMessage) {
+    let payload = message.payload
+    if let sfd = sfd {
+        let encoded = try! encoder.encode(payload)
+        encoded.withUnsafeBytes { buf in
+            withUnsafePointer(to: buf.count) {
+                let buf = UnsafeBufferPointer(start: $0, count: 1)
+                let rawBuf = UnsafeRawBufferPointer(buf)
+                check(send(sfd, rawBuf.baseAddress!, rawBuf.count, 0), "send")
+            }
+            _ = check(send(sfd, buf.baseAddress!, buf.count, 0), "send")
+        }
+    } else {
+        payload.print()
     }
 }
 
@@ -263,7 +251,7 @@ func parseBody(ofLength totalLength: Int) throws {
         return
     }
 
-    output.body.messages.forEach { outputPrint("\($0)") }
+    output.body.messages.forEach(sendOutput)
 }
 
 func spitItOut(startingWith firstLine: String) {

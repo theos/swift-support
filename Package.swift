@@ -19,12 +19,19 @@ let package = Package(
         )
     ],
     targets: [
-        .target(name: "SwiftcOutputParser"),
+        .target(name: "JobserverCommon"),
+        .target(
+            name: "SwiftcOutputParser",
+            dependencies: ["JobserverCommon"]
+        ),
         .testTarget(
             name: "SwiftcOutputParserTests",
             dependencies: ["SwiftcOutputParser"]
         ),
         .target(name: "FileMapGenerator"),
-        .target(name: "Jobserver")
+        .target(
+            name: "Jobserver",
+            dependencies: ["JobserverCommon"]
+        )
     ]
 )

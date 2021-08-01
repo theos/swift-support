@@ -2,6 +2,7 @@
 // half of GNU Make's jobserver
 
 import Foundation
+import JobserverCommon
 
 func usage() -> Never {
     print("Usage: \(CommandLine.arguments[0]) </path/to/jobserver/socket> <expected # of connections|-1>")
@@ -12,65 +13,37 @@ guard CommandLine.argc == 3, let connections = Int(CommandLine.arguments[2]), co
     usage()
 }
 
-@discardableResult
-func check<T: SignedInteger>(_ code: T, _ fn: String, file: StaticString = #file, line: Int = #line) -> T {
-    if code < 0 {
-        perror("Error: \(fn)() failed at \(file):\(line) (errno=\(errno))")
-        exit(1)
-    }
-    return code
-}
-
 var path = CommandLine.arguments[1]
 
 // serial output queue
 let outputQueue = DispatchQueue(label: "output-queue", qos: .userInteractive)
 
-#if os(Linux)
-let socketType = Int32(SOCK_STREAM.rawValue)
-#else
-let socketType = SOCK_STREAM
-#endif
-let serverFD = check(socket(AF_UNIX, socketType, 0), "socket")
-var addr = sockaddr_un()
-let addrLen = socklen_t(MemoryLayout.size(ofValue: addr))
-addr.sun_family = .init(AF_UNIX)
-#if !os(Linux)
-addr.sun_len = .init(addrLen)
-#endif
-withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
-    path.withUTF8 {
-        UnsafeMutableRawBufferPointer(UnsafeMutableBufferPointer(start: sunPath, count: 1))
-            .copyMemory(from: UnsafeRawBufferPointer($0))
-    }
-}
-check(withUnsafePointer(to: &addr) {
-    bind(serverFD, UnsafeRawPointer($0).assumingMemoryBound(to: sockaddr.self), addrLen)
-}, "bind")
-
+let serverFD = createSocket(path: path, kind: .server)
 check(listen(serverFD, 5), "listen")
 
 let group = DispatchGroup()
+let decoder = PropertyListDecoder()
 
 func serve(clientFD: Int32) {
-    var stringLen: Int = 0
+    var payloadLen: Int = 0
     while true {
-        let out = withUnsafeMutablePointer(to: &stringLen) { ptr -> Int in
+        let out = withUnsafeMutablePointer(to: &payloadLen) { ptr -> Int in
             let buf = UnsafeMutableRawBufferPointer(UnsafeMutableBufferPointer(start: ptr, count: 1))
             return check(recv(clientFD, buf.baseAddress!, buf.count, 0), "recv")
         }
         // if 0 then the other end is closed
         guard out != 0 else { break }
-        let stringBuf = UnsafeMutablePointer<CChar>.allocate(capacity: stringLen)
-        defer { stringBuf.deallocate() }
+        let payloadBuf = UnsafeMutablePointer<CChar>.allocate(capacity: payloadLen)
+        defer { payloadBuf.deallocate() }
         var received = 0
-        while received != stringLen {
-            received += check(recv(clientFD, stringBuf + received, stringLen - received, 0), "recv")
+        while received != payloadLen {
+            received += check(recv(clientFD, payloadBuf + received, payloadLen - received, 0), "recv")
         }
-        let string = String(bytesNoCopy: stringBuf, length: stringLen, encoding: .utf8, freeWhenDone: false)!
+        let payloadData = Data(bytesNoCopy: payloadBuf, count: payloadLen, deallocator: .none)
+        let payload = try! decoder.decode(JobserverPayload.self, from: payloadData)
         group.enter()
         outputQueue.async {
-            FileHandle.standardOutput.write(string.data(using: .utf8)!)
+            payload.print()
             group.leave()
         }
     }
