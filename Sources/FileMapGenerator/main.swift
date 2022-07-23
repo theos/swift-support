@@ -12,7 +12,8 @@ var dict: [String: [String: String]] = [:]
 for file in CommandLine.arguments[3...] {
     dict[file] = [
         "object": "\(dir)/\(file).\(tag).o",
-        "dependencies": "\(dir)/\(file).\(tag).Td"
+        "dependencies": "\(dir)/\(file).\(tag).Td",
+        "swift-dependencies": "\(dir)/\(file).\(tag).swiftdeps"
     ]
 }
 dict[""] = [
