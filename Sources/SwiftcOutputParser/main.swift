@@ -161,7 +161,7 @@ struct CompileOutput: OutputBody {
         case []:
             // the new Swift driver seems to (buggily?) provide an empty inputs
             // array for WMO builds
-            allMessages.append(SemanticMessage.compiling(file: "Swift module"))
+            allMessages.append(SemanticMessage.compiling(file: "module interface"))
         case let inputs?:
             allMessages += inputs.filter {
                 !$0.hasSuffix(".pch") && !$0.hasSuffix(".xc.swift")
@@ -200,10 +200,13 @@ struct Output: Decodable {
     enum Name: String, Decodable {
         case compile
         case mergeModule = "merge-module"
+        case emitModule = "emit-module"
 
         var bodyType: OutputBody.Type {
             switch self {
             case .compile:
+                return CompileOutput.self
+            case .emitModule:
                 return CompileOutput.self
             case .mergeModule:
                 return MergeModuleOutput.self
@@ -263,6 +266,8 @@ func spitItOut(startingWith firstLine: String) {
 
 func parse() throws {
     while let line = readLine() {
+        // weird edge case
+        if line.hasPrefix("error:") || line.hasPrefix("warning:") { continue }
         // `line` should always be a number (because parseBody eats the rest away).
         // If it isn't numeric, that probably means swiftc is outputting some error,
         // in which case we should just spit it out
