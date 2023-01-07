@@ -14,10 +14,9 @@ let package = Package(
             targets: ["FileMapGenerator"]
         ),
     ],
+    dependencies: [],
     targets: [
-        .target(
-            name: "SwiftcOutputParser"
-        ),
+        .target(name: "SwiftcOutputParser"),
         .testTarget(
             name: "SwiftcOutputParserTests",
             dependencies: ["SwiftcOutputParser"]
