@@ -13,25 +13,15 @@ let package = Package(
             name: "generate-output-file-map",
             targets: ["FileMapGenerator"]
         ),
-        .executable(
-            name: "swift-jobserver",
-            targets: ["Jobserver"]
-        )
     ],
     targets: [
-        .target(name: "JobserverCommon"),
         .target(
-            name: "SwiftcOutputParser",
-            dependencies: ["JobserverCommon"]
+            name: "SwiftcOutputParser"
         ),
         .testTarget(
             name: "SwiftcOutputParserTests",
             dependencies: ["SwiftcOutputParser"]
         ),
         .target(name: "FileMapGenerator"),
-        .target(
-            name: "Jobserver",
-            dependencies: ["JobserverCommon"]
-        )
     ]
 )

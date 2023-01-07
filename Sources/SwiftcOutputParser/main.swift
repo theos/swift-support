@@ -1,15 +1,14 @@
 import Foundation
-import JobserverCommon
 
 struct Options {
     let debug: Bool
     let colored: Bool
-    let jobserver: String
+    let lockPath: String
     let arch: String?
 }
 
 guard CommandLine.argc >= 4 else {
-    print("Usage: \(CommandLine.arguments[0]) <colored: 0|1> </path/to/jobserver/socket|-> [arch]")
+    print("Usage: \(CommandLine.arguments[0]) <colored: 0|1> </path/to/output.lock|-> [arch]")
     exit(EX_USAGE)
 }
 
@@ -18,16 +17,16 @@ var errorOccurred = false
 let options = Options(
     debug: ProcessInfo.processInfo.environment["DEBUG_OUTPUT"] != nil,
     colored: CommandLine.arguments[1] == "1",
-    jobserver: CommandLine.arguments[2],
+    lockPath: CommandLine.arguments[2],
     arch: CommandLine.arguments[3]
 )
 
-var jobserver = options.jobserver
-let sfd: Int32?
-if jobserver == "-" {
-    sfd = nil
+var lockPath = options.lockPath
+let lock: FileLock?
+if lockPath == "-" {
+    lock = nil
 } else {
-    sfd = createSocket(path: jobserver, kind: .client)
+    lock = .init(at: URL(fileURLWithPath: lockPath))
 }
 
 func debugPrint(_ message: Any) {
@@ -85,36 +84,49 @@ enum SemanticMessage: CustomStringConvertible {
         }
     }
 
-    var payload: JobserverPayload {
-        let message = "\(self)\n"
-        let fd: Int32
+    func print() {
+        let handle: FileHandle
         switch self {
         case .raw:
-            fd = FileHandle.standardError.fileDescriptor
+            handle = .standardError
         default:
-            fd = FileHandle.standardOutput.fileDescriptor
+            handle = .standardOutput
         }
-        return JobserverPayload(fileDescriptor: fd, message: message)
+        handle.write(Data("\(self)\n".utf8))
     }
 }
 
 let encoder = PropertyListEncoder()
 
-func sendOutput(_ message: SemanticMessage) {
-    let payload = message.payload
-    if let sfd = sfd {
-        let encoded = try! encoder.encode(payload)
-        encoded.withUnsafeBytes { buf in
-            withUnsafePointer(to: buf.count) {
-                let buf = UnsafeBufferPointer(start: $0, count: 1)
-                let rawBuf = UnsafeRawBufferPointer(buf)
-                check(send(sfd, rawBuf.baseAddress!, rawBuf.count, 0), "send")
-            }
-            _ = check(send(sfd, buf.baseAddress!, buf.count, 0), "send")
-        }
-    } else {
-        payload.print()
+@rethrows protocol RethrowingGet {
+    associatedtype Success
+    func get() throws -> Success
+}
+
+extension RethrowingGet {
+    func rethrowGet() rethrows -> Success {
+        return try get()
     }
+}
+
+extension Result: RethrowingGet {}
+
+// if withLock throws, falls back to calling body unlocked
+func tryWithLock<T>(_ body: () throws -> T) rethrows -> T {
+    guard let lock = lock else { return try body() }
+    let result: Result<T, Error>
+    do {
+        result = try lock.withLock {
+            Result { try body() }
+        }
+    } catch {
+        return try body()
+    }
+    return try result.rethrowGet()
+}
+
+func sendOutput(_ message: SemanticMessage) {
+    tryWithLock { message.print() }
 }
 
 extension Decodable {
@@ -242,7 +254,7 @@ func parseBody(ofLength totalLength: Int) throws {
         length += line.utf8.count
         return line
     }.joined().dropLast() // drop \n on final line
-    guard let data = bodyText.data(using: .utf8) else { return }
+    let data = Data(bodyText.utf8)
 
     let decoder = JSONDecoder()
     let output: Output
@@ -254,7 +266,11 @@ func parseBody(ofLength totalLength: Int) throws {
         return
     }
 
-    output.body.messages.forEach(sendOutput)
+    tryWithLock {
+        for message in output.body.messages {
+            sendOutput(message)
+        }
+    }
 }
 
 func spitItOut(startingWith firstLine: String) {
@@ -266,8 +282,15 @@ func spitItOut(startingWith firstLine: String) {
 
 func parse() throws {
     while let line = readLine() {
-        // weird edge case
-        if line.hasPrefix("error:") || line.hasPrefix("warning:") { continue }
+        if line.hasPrefix("error:") {
+            tryWithLock { print(line) }
+            errorOccurred = true
+            continue
+        }
+        if line.hasPrefix("warning:") {
+            tryWithLock { print(line) }
+            continue
+        }
         // `line` should always be a number (because parseBody eats the rest away).
         // If it isn't numeric, that probably means swiftc is outputting some error,
         // in which case we should just spit it out
