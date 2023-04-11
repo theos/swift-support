@@ -3,23 +3,35 @@ import Foundation
 struct Options {
     let debug: Bool
     let colored: Bool
+    let lockPath: String
     let arch: String?
 }
 
-guard CommandLine.argc >= 3 else {
-    print("Usage: \(CommandLine.arguments[0]) <colored: 0|1> [arch]")
+guard CommandLine.argc >= 4 else {
+    print("Usage: \(CommandLine.arguments[0]) <colored: 0|1> </path/to/output.lock|-> [arch]")
     exit(EX_USAGE)
 }
+
+var errorOccurred = false
 
 let options = Options(
     debug: ProcessInfo.processInfo.environment["DEBUG_OUTPUT"] != nil,
     colored: CommandLine.arguments[1] == "1",
-    arch: CommandLine.arguments[2]
+    lockPath: CommandLine.arguments[2],
+    arch: CommandLine.arguments[3]
 )
+
+var lockPath = options.lockPath
+let lock: FileLock?
+if lockPath == "-" {
+    lock = nil
+} else {
+    lock = .init(at: URL(fileURLWithPath: lockPath))
+}
 
 func debugPrint(_ message: Any) {
     guard options.debug else { return }
-    print(message)
+    print("\(message)")
 }
 
 enum Format {
@@ -71,6 +83,50 @@ enum SemanticMessage: CustomStringConvertible {
             return Format.stage(.blue).apply(to: "Generating \(header)\(archStr)")
         }
     }
+
+    func print() {
+        let handle: FileHandle
+        switch self {
+        case .raw:
+            handle = .standardError
+        default:
+            handle = .standardOutput
+        }
+        handle.write(Data("\(self)\n".utf8))
+    }
+}
+
+let encoder = PropertyListEncoder()
+
+@rethrows protocol RethrowingGet {
+    associatedtype Success
+    func get() throws -> Success
+}
+
+extension RethrowingGet {
+    func rethrowGet() rethrows -> Success {
+        return try get()
+    }
+}
+
+extension Result: RethrowingGet {}
+
+// if withLock throws, falls back to calling body unlocked
+func tryWithLock<T>(_ body: () throws -> T) rethrows -> T {
+    guard let lock = lock else { return try body() }
+    let result: Result<T, Error>
+    do {
+        result = try lock.withLock {
+            Result { try body() }
+        }
+    } catch {
+        return try body()
+    }
+    return try result.rethrowGet()
+}
+
+func sendOutput(_ message: SemanticMessage) {
+    tryWithLock { message.print() }
 }
 
 extension Decodable {
@@ -86,7 +142,9 @@ protocol OutputBody: Decodable {
 struct CompileOutput: OutputBody {
     enum Kind: String, Decodable {
         case began
+        case skipped
         case finished
+        case signalled
     }
 
     let kind: Kind
@@ -102,17 +160,36 @@ struct CompileOutput: OutputBody {
     }
 
     var messages: [SemanticMessage] {
-        if kind == .finished && (exitStatus ?? 0) != 0, let output = output {
-            return [.raw(output)]
-        } else {
-            return (inputs ?? []).filter { !$0.hasSuffix(".pch") }.map(SemanticMessage.compiling)
+        if (kind == .finished && (exitStatus ?? 0) != 0) || kind == .signalled {
+            errorOccurred = true
         }
+
+        var allMessages: [SemanticMessage] = []
+        if let output = output {
+            allMessages.append(.raw(output))
+        }
+
+        switch inputs {
+        case []:
+            // the new Swift driver seems to (buggily?) provide an empty inputs
+            // array for WMO builds
+            allMessages.append(SemanticMessage.compiling(file: "module interface"))
+        case let inputs?:
+            allMessages += inputs.filter {
+                !$0.hasSuffix(".pch") && !$0.hasSuffix(".xc.swift")
+            }.map(SemanticMessage.compiling)
+        case nil:
+            break
+        }
+
+        return allMessages
     }
 }
 
 struct MergeModuleOutput: OutputBody {
     enum Kind: String, Decodable {
         case began
+        case finished
     }
 
     struct OutputFile: Decodable {
@@ -121,10 +198,10 @@ struct MergeModuleOutput: OutputBody {
     }
 
     let kind: Kind
-    let outputs: [OutputFile]
+    let outputs: [OutputFile]?
 
     var messages: [SemanticMessage] {
-        outputs
+        (outputs ?? [])
             .filter { $0.type == "objc-header" }
             .map { URL(fileURLWithPath: $0.path).lastPathComponent }
             .map(SemanticMessage.swiftmoduleHeader)
@@ -135,10 +212,13 @@ struct Output: Decodable {
     enum Name: String, Decodable {
         case compile
         case mergeModule = "merge-module"
+        case emitModule = "emit-module"
 
         var bodyType: OutputBody.Type {
             switch self {
             case .compile:
+                return CompileOutput.self
+            case .emitModule:
                 return CompileOutput.self
             case .mergeModule:
                 return MergeModuleOutput.self
@@ -174,7 +254,7 @@ func parseBody(ofLength totalLength: Int) throws {
         length += line.utf8.count
         return line
     }.joined().dropLast() // drop \n on final line
-    guard let data = bodyText.data(using: .utf8) else { return }
+    let data = Data(bodyText.utf8)
 
     let decoder = JSONDecoder()
     let output: Output
@@ -186,7 +266,11 @@ func parseBody(ofLength totalLength: Int) throws {
         return
     }
 
-    output.body.messages.forEach { print($0) }
+    tryWithLock {
+        for message in output.body.messages {
+            sendOutput(message)
+        }
+    }
 }
 
 func spitItOut(startingWith firstLine: String) {
@@ -198,10 +282,20 @@ func spitItOut(startingWith firstLine: String) {
 
 func parse() throws {
     while let line = readLine() {
+        if line.hasPrefix("error:") {
+            tryWithLock { print(line) }
+            errorOccurred = true
+            continue
+        }
+        if line.hasPrefix("warning:") {
+            tryWithLock { print(line) }
+            continue
+        }
         // `line` should always be a number (because parseBody eats the rest away).
         // If it isn't numeric, that probably means swiftc is outputting some error,
         // in which case we should just spit it out
         guard let charsToRead = Int(line) else {
+            errorOccurred = true
             return spitItOut(startingWith: line)
         }
         try parseBody(ofLength: charsToRead)
@@ -215,5 +309,9 @@ do {
     if options.debug {
         fputs("Error: \(error)\n", stderr)
     }
+    exit(1)
+}
+
+if errorOccurred {
     exit(1)
 }
